@@ -701,7 +701,10 @@ static void configure_memory()
 
 static int harden_rt()
 {
-    if(!rtapi_is_realtime()) return -EINVAL;
+    if(!rtapi_is_realtime()) {
+	    rtapi_print_msg(RTAPI_MSG_ERR,"rtapi_is_realtime is 0\n");
+	    return -EINVAL;
+    }
 
     WITH_ROOT;
 #if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
@@ -776,7 +779,7 @@ static RtapiApp *makeApp()
 {
     if(euid != 0 || harden_rt() < 0)
     {
-        rtapi_print_msg(RTAPI_MSG_ERR, "Note: Using POSIX non-realtime\n");
+        rtapi_print_msg(RTAPI_MSG_ERR, "Note: Using POSIX non-realtime %d\n",euid);
         return new Posix(SCHED_OTHER);
     }
     WithRoot r;
