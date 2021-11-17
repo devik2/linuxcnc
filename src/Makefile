@@ -887,6 +887,9 @@ hal_pi_gpio-objs := 				\
     hal/drivers/hal_pi_gpio.o 		\
     hal/drivers/cpuinfo.o 		\
     $(MATHSTUB)
+obj-$(CONFIG_HAL_PI_STCNC) += hal_pi_stcnc.o
+hal_pi_stcnc-objs := hal/drivers/hal_pi_stcnc.o 		\
+    hal/drivers/cpuinfo.o $(MATHSTUB)
 endif
 
 obj-$(CONFIG_HOSTMOT2) += hostmot2.o hm2_test.o hm2_pci.o hm2_7i43.o hm2_7i90.o setsserial.o
@@ -1164,6 +1167,7 @@ endif
 ../rtlib/hm2_rpspi$(MODULE_EXT): $(addprefix objects/rt,$(hm2_rpspi-objs))
 ../rtlib/hal_bb_gpio$(MODULE_EXT): $(addprefix objects/rt,$(hal_bb_gpio-objs))
 ../rtlib/hal_pi_gpio$(MODULE_EXT): $(addprefix objects/rt,$(hal_pi_gpio-objs))
+../rtlib/hal_pi_stcnc$(MODULE_EXT): $(addprefix objects/rt,$(hal_pi_stcnc-objs))
 
 ifeq ($(TRIVIAL_BUILD),no)
 READ_RTDEPS = $(wildcard $(RTDEPS))
