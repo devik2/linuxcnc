@@ -1,0 +1,31 @@
+
+#loadrt [EMCMOT]EMCMOT base_period_nsec=[EMCMOT]BASE_PERIOD servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[KINS]JOINTS
+
+#loadrt charge_pump
+
+loadrt threads name1=servo-thread period1=1000000
+loadrt hal_pi_stcnc
+loadrt siggen 
+loadrt conv_float_s32 count=2
+
+setp siggen.0.amplitude 40000
+addf siggen.0.update servo-thread
+#addf conv-float-s32.0 servo-thread
+addf hal_pi_stcnc.update servo-thread
+
+#net xstep siggen.0.sine => hal_pi_stcnc.srv_pos.0
+#net ystep siggen.0.cosine => hal_pi_stcnc.srv_pos.1
+
+loadrt pid
+addf pid.0.do-pid-calcs servo-thread
+
+setp pid.0.maxoutput 9.9
+setp pid.0.maxerrorI 100
+setp pid.0.Igain 0.1
+setp pid.0.Pgain 0.1
+#net spindle-speed-motion spindle.0.speed-out => pid.0.command
+net spindle-fb hal_pi_stcnc.spe_rps => pid.0.feedback
+net spindle-out pid.0.output => hal_pi_stcnc.spe_spd
+#net spindle-rev spindle.0.reverse => hal_pi_stcnc.spe_rev
+
+start

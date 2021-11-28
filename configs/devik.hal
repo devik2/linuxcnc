@@ -1,0 +1,72 @@
+
+loadrt [KINS]KINEMATICS
+loadrt [EMCMOT]EMCMOT base_period_nsec=[EMCMOT]BASE_PERIOD servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[KINS]JOINTS
+loadrt hal_pi_stcnc
+
+#loadrt estop_latch
+#net charge-pump <= estop-latch.0.watchdog
+
+#addf estop-latch.0 base-thread
+net estop-loop iocontrol.0.user-enable-out iocontrol.0.emc-enable-in
+
+addf hal_pi_stcnc.update servo-thread
+addf motion-command-handler servo-thread
+addf motion-controller servo-thread
+
+#net spindle-cw <= spindle.0.forward
+#net coolant-flood <= iocontrol.0.coolant-flood
+#net spindle-on spindle.0.on stepgen.4.enable
+
+net both-home-x <= hal_pi_stcnc.ins.0
+net both-home-y <= hal_pi_stcnc.ins.1
+net both-home-z <= hal_pi_stcnc.ins.2
+
+setp hal_pi_stcnc.srv_scale.0 320
+setp hal_pi_stcnc.srv_scale.1 -320
+setp hal_pi_stcnc.srv_scale.2 -320
+net xpos-cmd joint.0.motor-pos-cmd => hal_pi_stcnc.srv_pos.0
+net xpos-cmd => joint.0.motor-pos-fb
+net both-home-x => joint.0.home-sw-in
+net both-home-x => joint.0.neg-lim-sw-in
+net both-home-x => joint.0.pos-lim-sw-in
+
+net ypos-cmd joint.1.motor-pos-cmd => hal_pi_stcnc.srv_pos.1
+net ypos-cmd joint.1.motor-pos-cmd => joint.1.motor-pos-fb
+net both-home-y => joint.1.home-sw-in
+net both-home-y => joint.1.neg-lim-sw-in
+net both-home-y => joint.1.pos-lim-sw-in
+
+net zpos-cmd joint.2.motor-pos-cmd => hal_pi_stcnc.srv_pos.2
+net zpos-cmd joint.2.motor-pos-cmd => joint.2.motor-pos-fb
+net both-home-z => joint.2.home-sw-in
+net both-home-z => joint.2.neg-lim-sw-in
+net both-home-z => joint.2.pos-lim-sw-in
+
+loadrt pid num_chan=1
+addf pid.0.do-pid-calcs servo-thread
+setp pid.0.maxoutput 9.9
+setp pid.0.maxerrorI 200
+setp pid.0.Igain 0.03
+setp pid.0.Pgain 0.03
+setp pid.0.FF0 0.02
+
+net spindle-enable spindle.0.on => pid.0.enable
+net spindle-fb hal_pi_stcnc.spe_rps => pid.0.feedback
+net spindle-out pid.0.output => hal_pi_stcnc.spe_spd
+net spindle-speed-mot spindle.0.speed-out-rps => pid.0.command
+net spindle-rev spindle.0.reverse => hal_pi_stcnc.spe_rev
+
+loadrt near 
+addf near.0 servo-thread
+net spindle-fb => near.0.in1
+net spindle-speed-mot => near.0.in2
+net spindle-at-spd near.0.out => spindle.0.at-speed
+setp near.0.difference 10
+
+#loadusr -W hal_manualtoolchange
+#net tool-change iocontrol.0.tool-change => hal_manualtoolchange.change
+#net tool-changed iocontrol.0.tool-changed <= hal_manualtoolchange.changed
+#net tool-number iocontrol.0.tool-prep-number => hal_manualtoolchange.number
+#net tool-prepare-loopback iocontrol.0.tool-prepare => iocontrol.0.tool-prepared
+
+#net probe parport.0.pin-13-in-not => motion.probe-input
