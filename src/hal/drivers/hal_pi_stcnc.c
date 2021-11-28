@@ -57,30 +57,45 @@ RTAPI_MP_INT(spidev_rate, "SPI rate in kHz");
 struct status_blk_t {
         uint16_t seq;
         uint16_t us;
-        uint32_t srv_pos[SRV_N]; // actual servo pos
-        uint16_t spe_pos;       // spindle pos (indexing)
-        uint16_t _pad1;
+        int32_t srv_pos[SRV_N]; // actual servo pos
+        int16_t spe_pos;       // spindle pos (indexing)
+        int16_t spe_spd;	// rps * 16
         uint16_t ins;           // input pin statuses
+        uint16_t _pad2;
+	uint32_t csum;
 
 } __attribute__ ((aligned (4))) status_blk;
 
+#define P_OUTS_EN_OFF 0		// servos en
+#define P_OUTS_PWEN_OFF 4	// aux power en (sensors)
 struct cmd_blk_t {
         uint8_t type;
         uint8_t scnt;   // servo cnt in srv_pos
         uint16_t seq;   // to detect missing cmd
-        uint32_t srv_pos[SRV_N]; // requested servo pos
+        int32_t srv_pos[SRV_N]; // requested servo pos
         uint16_t spe_spd;       // requested spindle speed 0...0xffff
         uint8_t spe_rev;        // reverse spindle
-        uint8_t _pad1;
+	uint8_t leds;           // indicator leds status
         uint16_t outs;          // requested output pins states
+        uint16_t _pad2;
+	uint32_t csum;
 
 } __attribute__ ((aligned (4))) cmd_blk;
 
+#define LED_N 5
 struct stcnc_data_t {
-	hal_bit_t *led;
-	hal_u32_t *spe_spd;
-	hal_u32_t dbg,*dbgp;
-	hal_s32_t *srv0;
+	hal_bit_t *led[LED_N];
+	hal_bit_t *spe_rev;
+	hal_float_t *spe_spd;
+	hal_float_t *spe_rps;
+	hal_u32_t dbg[3];
+	hal_float_t *srv_pos[SRV_N];
+	hal_float_t *srv_fb[SRV_N];
+	hal_bit_t *srv_en[SRV_N];
+	hal_bit_t *outs[12];
+	hal_bit_t *ins[16];
+
+	hal_float_t srv_scale[SRV_N];
 } static *stcnc_data;
 
 static int spi;
@@ -106,22 +121,61 @@ fail_errno:
     return -errno;
 }
 
+static uint32_t comp_sum(uint32_t *p,int cnt)
+{
+    uint32_t x = 0;
+    for (int i=0;i<cnt;i++) x += p[i];
+    return x;
+}
+
 static void update(void *arg, long period)
 {
+    int i;
     cmd_blk.seq++;
     cmd_blk.type = 1;
     cmd_blk.scnt = 4;
-    cmd_blk.spe_spd = *stcnc_data->spe_spd;
-    cmd_blk.srv_pos[0] = *stcnc_data->srv0;
+    cmd_blk.outs = 0;
+    cmd_blk.spe_spd = *stcnc_data->spe_spd * 6553;
+    cmd_blk.spe_rev = *stcnc_data->spe_rev;
+    cmd_blk.leds = 0;
+    for (i=0;i<LED_N;i++) {
+	    if (*stcnc_data->led[i]) cmd_blk.leds |= 1<<i;
+    }
+    cmd_blk.outs = 0;
+    for (i=0;i<12;i++) {
+	    if (*stcnc_data->outs[i]) cmd_blk.outs |= 16<<i;
+    }
+    hal_float_t sc[SRV_N];
+    for (i=0;i<SRV_N;i++) {
+	    sc[i] = stcnc_data->srv_scale[i] * 1024;
+	    cmd_blk.srv_pos[i] = *stcnc_data->srv_pos[i] * sc[i];
+	    if (*stcnc_data->srv_en) cmd_blk.outs |= 1<<i;
+    }
+    cmd_blk.csum = comp_sum((uint32_t*)&cmd_blk,sizeof(cmd_blk)/4-1);
     xfer.tx_buf = (uint32_t)&cmd_blk;
     xfer.rx_buf = (uint32_t)&status_blk;
-    stcnc_data->dbg = ioctl(spi, SPI_IOC_MESSAGE(1), &xfer)+1;
+    i = ioctl(spi, SPI_IOC_MESSAGE(1), &xfer);
+    if (i<=0) { 
+	    stcnc_data->dbg[0]++;
+	    return;
+    }
+    uint32_t sum = comp_sum((uint32_t*)&status_blk,sizeof(status_blk)/4-1);
+    if (sum != status_blk.csum) {
+	    stcnc_data->dbg[1]++;
+	    return;
+    }
+    for (i=0;i<SRV_N;i++) {
+	    *stcnc_data->srv_fb[i] = status_blk.srv_pos[i] / sc[i];
+    }
+    for (i=0;i<16;i++) {
+	    *stcnc_data->ins[i] = status_blk.ins & (1<<i) ? 1 : 0;
+    }
+    *stcnc_data->spe_rps = status_blk.spe_spd * (1.0/16);
 }
 
 int rtapi_app_main(void)
 {
-//    int n;
-    int rev,retval;
+    int rev,retval,n;
 
     if ((rev = get_rpi_revision()) < 0) {
       rtapi_print_msg(RTAPI_MSG_ERR,
@@ -156,7 +210,7 @@ int rtapi_app_main(void)
     if (!stcnc_data) goto err;
 
     retval = hal_export_funct("hal_pi_stcnc.update", update, 0,
-			      0, 0, comp_id);
+			      1, 0, comp_id);
     if (retval < 0) {
 err:
 	rtapi_print_msg(RTAPI_MSG_ERR,
@@ -165,16 +219,36 @@ err:
 	return -1;
     }
 
-    if (hal_pin_bit_new("hal_pi_stcnc.led",HAL_IN,
-			    &stcnc_data->led,comp_id) < 0) goto err;
-    if (hal_pin_u32_new("hal_pi_stcnc.spe_spd",HAL_IN,
+    for (n=0;n<LED_N;n++) {
+	    if (hal_pin_bit_newf(HAL_IN,stcnc_data->led+n,
+			    comp_id,"hal_pi_stcnc.led.%d",n) < 0) goto err;
+    }
+    if (hal_pin_float_new("hal_pi_stcnc.spe_spd",HAL_IN,
 			    &stcnc_data->spe_spd,comp_id) < 0) goto err;
-    if (hal_pin_s32_new("hal_pi_stcnc.pos.0",HAL_IN,
-			    &stcnc_data->srv0,comp_id) < 0) goto err;
-    if (hal_pin_u32_new("hal_pi_stcnc.dbg",HAL_OUT,
-			    &stcnc_data->dbgp,comp_id) < 0) goto err;
-    stcnc_data->dbgp = &stcnc_data->dbg;
-    stcnc_data->dbg = 7;
+    if (hal_pin_bit_new("hal_pi_stcnc.spe_rev",HAL_IN,
+			    &stcnc_data->spe_rev,comp_id) < 0) goto err;
+    if (hal_pin_float_new("hal_pi_stcnc.spe_rps",HAL_OUT,
+			    &stcnc_data->spe_rps,comp_id) < 0) goto err;
+    for (n=0;n<SRV_N;n++) {
+	stcnc_data->srv_scale[n] = 1.0;
+    	if (hal_param_float_newf(HAL_RW,stcnc_data->srv_scale+n,
+			comp_id,"hal_pi_stcnc.srv_scale.%d",n) < 0) goto err;
+    	if (hal_pin_float_newf(HAL_IN,stcnc_data->srv_pos+n,
+			comp_id,"hal_pi_stcnc.srv_pos.%d",n) < 0) goto err;
+    	if (hal_pin_float_newf(HAL_OUT,stcnc_data->srv_fb+n,
+			comp_id,"hal_pi_stcnc.srv_fb.%d",n) < 0) goto err;
+    	if (hal_pin_bit_newf(HAL_IN,stcnc_data->srv_en+n,
+			comp_id,"hal_pi_stcnc.en.%d",n) < 0) goto err;
+    }
+    for (n=0;n<16;n++) {
+    	if (n<12 && hal_pin_bit_newf(HAL_IN,stcnc_data->outs+n,
+			comp_id,"hal_pi_stcnc.outs.%d",n) < 0) goto err;
+    	if (hal_pin_bit_newf(HAL_OUT,stcnc_data->ins+n,
+			comp_id,"hal_pi_stcnc.ins.%d",n) < 0) goto err;
+    }
+    if (hal_param_u32_new("hal_pi_stcnc.dbg0",HAL_RO, stcnc_data->dbg,comp_id) < 0) goto err;
+    if (hal_param_u32_new("hal_pi_stcnc.dbg1",HAL_RO, stcnc_data->dbg+1,comp_id) < 0) goto err;
+    if (hal_param_u32_new("hal_pi_stcnc.dbg2",HAL_RO, stcnc_data->dbg+2,comp_id) < 0) goto err;
 
     memset(&xfer,0,sizeof(xfer));
     xfer.len = sizeof(cmd_blk);
