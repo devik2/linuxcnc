@@ -3,7 +3,7 @@
 
 #loadrt charge_pump
 
-loadrt threads name1=servo-thread period1=1000000
+loadrt threads name1=servo-thread period1=5000000
 loadrt hal_pi_stcnc
 loadrt siggen 
 loadrt conv_float_s32 count=2

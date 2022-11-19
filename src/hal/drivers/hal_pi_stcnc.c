@@ -52,22 +52,24 @@ RTAPI_MP_STRING(spidev_path, "path to spi device");
 static int spidev_rate = 10000; 
 RTAPI_MP_INT(spidev_rate, "SPI rate in kHz");
 
-#define SRV_N 4 // servo count
+#define SRV_N 6		// servo count
+#define FLG_PZERO 1	// zero all servo hw pos
 
 struct status_blk_t {
         uint16_t seq;
         uint16_t us;
         int32_t srv_pos[SRV_N]; // actual servo pos
         int16_t spe_pos;       // spindle pos (indexing)
-        int16_t spe_spd;	// rps * 16
+        int16_t spe_spd;	// rpm
         uint16_t ins;           // input pin statuses
-        uint16_t _pad2;
+	uint8_t flags;
+        uint8_t spe_load;
 	uint32_t csum;
 
 } __attribute__ ((aligned (4))) status_blk;
 
 #define P_OUTS_EN_OFF 0		// servos en
-#define P_OUTS_PWEN_OFF 4	// aux power en (sensors)
+#define P_OUTS_PWEN_OFF 8	// aux power en (sensors)
 struct cmd_blk_t {
         uint8_t type;
         uint8_t scnt;   // servo cnt in srv_pos
@@ -77,7 +79,8 @@ struct cmd_blk_t {
         uint8_t spe_rev;        // reverse spindle
 	uint8_t leds;           // indicator leds status
         uint16_t outs;          // requested output pins states
-        uint16_t _pad2;
+	uint8_t flags;
+        uint8_t _pad2;
 	uint32_t csum;
 
 } __attribute__ ((aligned (4))) cmd_blk;
@@ -88,6 +91,8 @@ struct stcnc_data_t {
 	hal_bit_t *spe_rev;
 	hal_float_t *spe_spd;
 	hal_float_t *spe_rps;
+	hal_float_t *spe_pos;
+	hal_bit_t *spe_index_enable;
 	hal_u32_t dbg[3];
 	hal_float_t *srv_pos[SRV_N];
 	hal_float_t *srv_fb[SRV_N];
@@ -101,6 +106,9 @@ struct stcnc_data_t {
 static int spi;
 struct spi_ioc_transfer xfer;
 static int comp_id;		/* component ID */
+static int inited;
+static int prev_spe_pos;
+static int16_t pos_offset;
 
 static int spidev_open_and_configure(char *dev, int khz) 
 {
@@ -109,6 +117,7 @@ static int spidev_open_and_configure(char *dev, int khz)
 
     v = 0;
     if (ioctl(fd, SPI_IOC_WR_LSB_FIRST, &v) < 0) goto fail_errno;
+    v = SPI_MODE_0;
     if (ioctl(fd, SPI_IOC_WR_MODE, &v) < 0) goto fail_errno;
     v = 1000*khz;
     if (ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &v) < 0) goto fail_errno;
@@ -135,21 +144,22 @@ static void update(void *arg, long period)
     cmd_blk.type = 1;
     cmd_blk.scnt = 4;
     cmd_blk.outs = 0;
-    cmd_blk.spe_spd = *stcnc_data->spe_spd * 6553;
+    cmd_blk.spe_spd = *stcnc_data->spe_spd;
     cmd_blk.spe_rev = *stcnc_data->spe_rev;
     cmd_blk.leds = 0;
+    cmd_blk.flags = inited ? 0 : FLG_PZERO;
     for (i=0;i<LED_N;i++) {
 	    if (*stcnc_data->led[i]) cmd_blk.leds |= 1<<i;
     }
     cmd_blk.outs = 0;
-    for (i=0;i<12;i++) {
-	    if (*stcnc_data->outs[i]) cmd_blk.outs |= 16<<i;
+    for (i=0;i<8;i++) {
+	    if (*stcnc_data->outs[i]) cmd_blk.outs |= 0x100<<i;
     }
     hal_float_t sc[SRV_N];
     for (i=0;i<SRV_N;i++) {
 	    sc[i] = stcnc_data->srv_scale[i] * 1024;
 	    cmd_blk.srv_pos[i] = *stcnc_data->srv_pos[i] * sc[i];
-	    if (*stcnc_data->srv_en) cmd_blk.outs |= 1<<i;
+	    if (*stcnc_data->srv_en[i]) cmd_blk.outs |= 1<<i;
     }
     cmd_blk.csum = comp_sum((uint32_t*)&cmd_blk,sizeof(cmd_blk)/4-1);
     xfer.tx_buf = (uint32_t)&cmd_blk;
@@ -170,7 +180,17 @@ static void update(void *arg, long period)
     for (i=0;i<16;i++) {
 	    *stcnc_data->ins[i] = status_blk.ins & (1<<i) ? 1 : 0;
     }
-    *stcnc_data->spe_rps = status_blk.spe_spd * (1.0/16);
+    *stcnc_data->spe_rps = status_blk.spe_spd;
+    *stcnc_data->spe_pos = (status_blk.spe_pos+pos_offset) * (1.0/16);
+    uint32_t pb = status_blk.spe_pos & 15;
+    uint32_t pa = prev_spe_pos & 15;
+    if (((pa == 15 && pb == 0) || (pa == 0 && pb == 15)) 
+		    && *stcnc_data->spe_index_enable) {
+	    *stcnc_data->spe_index_enable = 0;
+	    pos_offset = -status_blk.spe_pos;
+    }
+    prev_spe_pos = status_blk.spe_pos;
+    if (status_blk.flags & FLG_PZERO) inited = 1;
 }
 
 int rtapi_app_main(void)
@@ -227,8 +247,12 @@ err:
 			    &stcnc_data->spe_spd,comp_id) < 0) goto err;
     if (hal_pin_bit_new("hal_pi_stcnc.spe_rev",HAL_IN,
 			    &stcnc_data->spe_rev,comp_id) < 0) goto err;
+    if (hal_pin_bit_new("hal_pi_stcnc.spe_index_enable",HAL_IO,
+		    &stcnc_data->spe_index_enable,comp_id) < 0) goto err;
     if (hal_pin_float_new("hal_pi_stcnc.spe_rps",HAL_OUT,
 			    &stcnc_data->spe_rps,comp_id) < 0) goto err;
+    if (hal_pin_float_new("hal_pi_stcnc.spe_pos",HAL_OUT,
+			    &stcnc_data->spe_pos,comp_id) < 0) goto err;
     for (n=0;n<SRV_N;n++) {
 	stcnc_data->srv_scale[n] = 1.0;
     	if (hal_param_float_newf(HAL_RW,stcnc_data->srv_scale+n,

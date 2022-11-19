@@ -26,62 +26,58 @@ addf hal_pi_stcnc.update servo-thread
 addf motion-command-handler servo-thread
 addf motion-controller servo-thread
 
-net both-home-x <= hal_pi_stcnc.ins.0
-net both-home-y <= hal_pi_stcnc.ins.1
-net both-home-z <= hal_pi_stcnc.ins.2
+net motion-en motion.motion-enabled => hal_pi_stcnc.en.3
+net motion-en => hal_pi_stcnc.en.4
+net motion-en => hal_pi_stcnc.en.5
 
-net motion-en motion.motion-enabled => hal_pi_stcnc.en.0
-net motion-en => hal_pi_stcnc.en.1
-net motion-en => hal_pi_stcnc.en.2
+setp hal_pi_stcnc.srv_scale.3 -40
+setp hal_pi_stcnc.srv_scale.4 40
+setp hal_pi_stcnc.srv_scale.5 -40
 
-setp hal_pi_stcnc.srv_scale.0 320
-setp hal_pi_stcnc.srv_scale.1 -320
-setp hal_pi_stcnc.srv_scale.2 40
+net xpos-cmd joint.0.motor-pos-cmd => hal_pi_stcnc.srv_pos.3
+net xpos-fb hal_pi_stcnc.srv_fb.3 => joint.0.motor-pos-fb
+net home-x => joint.0.home-sw-in
+net home-x hal_pi_stcnc.ins.10 => joint.0.neg-lim-sw-in
+net swhi-x hal_pi_stcnc.ins.11 => joint.0.pos-lim-sw-in
 
-net xpos-cmd joint.0.motor-pos-cmd => hal_pi_stcnc.srv_pos.0
-net xpos-fb hal_pi_stcnc.srv_fb.0 => joint.0.motor-pos-fb
-net both-home-x => joint.0.home-sw-in
-net both-home-x => joint.0.neg-lim-sw-in
-net both-home-x => joint.0.pos-lim-sw-in
+net ypos-cmd joint.1.motor-pos-cmd => hal_pi_stcnc.srv_pos.4
+net ypos-fb hal_pi_stcnc.srv_fb.4 => joint.1.motor-pos-fb
+net home-y => joint.1.home-sw-in
+net home-y hal_pi_stcnc.ins.12 => joint.1.neg-lim-sw-in
+net swhi-y hal_pi_stcnc.ins.13 => joint.1.pos-lim-sw-in
 
-net ypos-cmd joint.1.motor-pos-cmd => hal_pi_stcnc.srv_pos.1
-net ypos-fb hal_pi_stcnc.srv_fb.1 => joint.1.motor-pos-fb
-net both-home-y => joint.1.home-sw-in
-net both-home-y => joint.1.neg-lim-sw-in
-net both-home-y => joint.1.pos-lim-sw-in
+net zpos-cmd joint.2.motor-pos-cmd => hal_pi_stcnc.srv_pos.5
+net zpos-fb hal_pi_stcnc.srv_fb.5 => joint.2.motor-pos-fb
+net home-z hal_pi_stcnc.ins.15 => joint.2.home-sw-in
+net home-z => joint.2.pos-lim-sw-in
+net swlo-z hal_pi_stcnc.ins.14 => joint.2.neg-lim-sw-in
 
-net zpos-cmd joint.2.motor-pos-cmd => hal_pi_stcnc.srv_pos.2
-net zpos-fb hal_pi_stcnc.srv_fb.2 => joint.2.motor-pos-fb
-net both-home-z => joint.2.home-sw-in
-net both-home-z => joint.2.neg-lim-sw-in
-net both-home-z => joint.2.pos-lim-sw-in
+#loadrt pid num_chan=1
+#addf pid.0.do-pid-calcs servo-thread
+#setp pid.0.maxoutput 9.9
+#setp pid.0.maxerrorI 200
+#setp pid.0.Igain 0.03
+#setp pid.0.Pgain 0.03
+#setp pid.0.FF0 0.02
 
-loadrt pid num_chan=1
-addf pid.0.do-pid-calcs servo-thread
-setp pid.0.maxoutput 9.9
-setp pid.0.maxerrorI 200
-setp pid.0.Igain 0.03
-setp pid.0.Pgain 0.03
-setp pid.0.FF0 0.02
-
-net spindle-enable spindle.0.on => pid.0.enable
-net spindle-fb hal_pi_stcnc.spe_rps => pid.0.feedback
-net spindle-out pid.0.output => hal_pi_stcnc.spe_spd
-net spindle-speed-mot spindle.0.speed-out-rps => pid.0.command
+net spindle-speed-rpm spindle.0.speed-out-abs => hal_pi_stcnc.spe_spd
 net spindle-rev spindle.0.reverse => hal_pi_stcnc.spe_rev
+net spindle-fb hal_pi_stcnc.spe_rps => spindle.0.speed-in
+net spindle-pos hal_pi_stcnc.spe_pos => spindle.0.revs
+net spindle-index hal_pi_stcnc.spe_index_enable => spindle.0.index-enable
 
 loadrt near 
 addf near.0 servo-thread
 net spindle-fb => near.0.in1
-net spindle-speed-mot => near.0.in2
+net spindle-speed-rpm => near.0.in2
 net spindle-at-spd near.0.out => spindle.0.at-speed
 setp near.0.difference 10
 
-#loadusr -W hal_manualtoolchange
-#net tool-change iocontrol.0.tool-change => hal_manualtoolchange.change
-#net tool-changed iocontrol.0.tool-changed <= hal_manualtoolchange.changed
-#net tool-number iocontrol.0.tool-prep-number => hal_manualtoolchange.number
-#net tool-prepare-loopback iocontrol.0.tool-prepare => iocontrol.0.tool-prepared
+loadusr -W hal_manualtoolchange
+net tool-change iocontrol.0.tool-change => hal_manualtoolchange.change
+net tool-changed iocontrol.0.tool-changed <= hal_manualtoolchange.changed
+net tool-number iocontrol.0.tool-prep-number => hal_manualtoolchange.number
+net tool-prepare-loopback iocontrol.0.tool-prepare => iocontrol.0.tool-prepared
 
 # detect motion type 
 net mo-type motion.motion-type => select8.0.sel
